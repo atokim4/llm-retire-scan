@@ -1,0 +1,27 @@
+{
+  "name": "llm-retire-scan",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Finds OpenAI and Claude model IDs that are shut down or shutting down (gpt-4o, gpt-4o-mini, gpt-4.1 on 2027-01-14) and the request settings that break on their reasoning-model replacements; --fix rewrites the safe cases.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Sunnatulla E",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "scan": "node src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/atokim4/llm-retire-scan.git"
+  }
+}

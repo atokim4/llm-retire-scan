@@ -1,6 +1,6 @@
 {
   "name": "llm-retire-scan",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Finds OpenAI and Claude model IDs that are shut down or shutting down (GPT Image 1.5 on 2026-12-01, gpt-5 / o3 on 2026-12-11, gpt-4o / gpt-4.1 on 2027-01-14) and the request settings that break on their GPT-6 replacements; --fix rewrites the safe cases.",
   "type": "module",

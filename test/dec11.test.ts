@@ -408,3 +408,176 @@ describe("third review regressions", () => {
     }
   });
 });
+
+// Cases taken from the 41-repo census (2026-11-14): each line is a shape found in a real repo.
+describe("census regressions (run 2)", () => {
+  const ids = (file: string, text: string) => scan(file, text).findings.map((f) => `${f.line}:${f.message.split(" ")[0]}`);
+  const fixables = (file: string, text: string) => scan(file, text).findings.filter((f) => f.fixable).map((f) => f.line);
+
+  it("never reads gpt-5 out of a regex for gpt-5.1 / gpt-5.6", () => {
+    const py = [
+      'A = re.compile(r"^gpt-5\\.1-chat-latest$")',
+      '_EFFORT = [(re.compile(r"^gpt-5(?:-\\d{4}-\\d{2}-\\d{2})?$"), "low")]',
+      'PAT = r"^(?:o[1345](?:-(?:mini|nano|pro))?|gpt-5(?:\\.\\d+)*(?:-.*)?)$"',
+      "",
+    ].join("\n");
+    expect(ids("models.py", py)).toEqual([]);
+    expect(ids("m.ts", 'const RE = new RegExp("^gpt-5\\\\.6-sol$");\n')).toEqual([]);
+  });
+
+  it("treats comparisons and Go prefix tests as name checks", () => {
+    expect(ids("p.go", 'return strings.HasPrefix(model, "gpt-5") ||\n\tstrings.HasPrefix(model, "o3")\n')).toEqual([]);
+    expect(ids("c.py", 'if config.model == "gpt-5-mini" and x:\n    pass\n')).toEqual([]);
+    expect(ids("c.ts", 'const ok = modelName === "gpt-5" || "gpt-5-mini" !== name;\n')).toEqual([]);
+  });
+
+  it("skips lists of family prefixes (bare gpt / o1 / o), in Python, JS and Go", () => {
+    expect(ids("r.py", '_PREFIXES = {"openai": ("gpt", "o1", "o3", "o4", "chatgpt")}\n')).toEqual([]);
+    expect(ids("r.py", 'o_series_models = ["o1", "o3", "o4", "o1-mini", "o3-mini"]\n')).toEqual([]);
+    expect(ids("r.js", 'const NO_TEMP_MODELS = ["o", "gpt-5"];\n')).toEqual([]);
+    expect(ids("m.go", '\t{"openai", []string{"gpt", "chatgpt", "codex", "o1", "o3", "o4"}},\n')).toEqual([]);
+    expect(ids("s.py", 'if any(p in name for p in ["gpt", "o1", "o3"]):\n    pass\n')).toEqual([]);
+  });
+
+  it("reports catalog and price entries but never swaps them", () => {
+    const ts = [
+      "export const MODELS = [",
+      '  { id: "gpt-5", label: "GPT-5" },',
+      "  {",
+      "    name: 'gpt-5-mini',",
+      "    context_window: 400_000,",
+      "    pricing: { input: 0.25 },",
+      "  },",
+      "];",
+      "const PRICES = [tokenPriced('openai', 'gpt-5-nano', 0.05, 0.4)];",
+      "",
+    ].join("\n");
+    expect(ids("catalog.ts", ts)).toEqual(["2:gpt-5", "4:gpt-5-mini", "9:gpt-5-nano"]);
+    expect(fixables("catalog.ts", ts)).toEqual([]);
+    const py = [
+      'DEFAULT = [Model("o3", 200000, parameters=P), Model("gpt-5", k(400), deprecated=True, replacement="gpt-5.6-sol")]',
+      'COSTS = [(("gpt-5-mini",), 0.25, 2.0)]',
+      "",
+    ].join("\n");
+    expect(ids("models.py", py)).toEqual(["1:o3", "1:gpt-5", "2:gpt-5-mini"]);
+    expect(fixables("models.py", py)).toEqual([]);
+    const json = '[\n  {\n    "model_name": "gpt-5",\n    "input_cost": 1.25\n  }\n]\n';
+    expect(fixables("seed/llm_pricing.json", json)).toEqual([]);
+    expect(ids("seed/llm_pricing.json", json)).toEqual(["3:gpt-5"]);
+  });
+
+  it("keeps constants named after a model (GPT_5 = 'gpt-5') reported, not rewritten", () => {
+    const text = 'GPT_5 = "gpt-5"\nGPT_5_MINI = "gpt-5-mini"\nCOMETAPI_GPT_5_NANO = "gpt-5-nano"\n';
+    expect(ids("enums.py", text)).toEqual(["1:gpt-5", "2:gpt-5-mini", "3:gpt-5-nano"]);
+    expect(fixables("enums.py", text)).toEqual([]);
+    expect(fixables("param.go", '\tModelGPT5Mini = "gpt-5-mini"\n')).toEqual([]);
+    expect(fixables("Models.swift", '    static let gpt5_mini = "gpt-5-mini"\n')).toEqual([]);
+    // A setting that only mentions "model" still swaps.
+    expect(fixables("conf.py", 'DEFAULT_MODEL = "gpt-5-mini"\n')).toEqual([1]);
+  });
+
+  it("doesn't swap type-map keys or family names", () => {
+    const ts = "type M = {\n  'gpt-4.1': readonly ['text'];\n  'gpt-5': readonly ['text', 'image'];\n};\n";
+    expect(fixables("meta.ts", ts)).toEqual([]);
+    expect(ids("s.ts", "const S = [{ family: 'gpt-5', prompt: P }];\n")).toEqual([]);
+    expect(fixables("m.toml", '[models."gpt-5-mini"]\nmodel = "gpt-5-mini"\n')).toEqual([2]);
+  });
+
+  it("holds Literal lists, subscript lookups, sets and newline-separated type maps", () => {
+    expect(fixables("models.py", 'KnownModel = Literal[\n    "openai/o3",\n    "openai/gpt-5",\n]\n')).toEqual([]);
+    expect(fixables("m.ts", 'const pick = [staticModels.openai["gpt-5-nano"]];\n')).toEqual([]);
+    expect(fixables("base.py", 'reasoning_models = {\n    "o1", "o3",\n    "gpt-5", "gpt-5o",\n}\n')).toEqual([]);
+    const map = "type M = {\n  'gpt-4o': readonly ['text']\n  'gpt-5': readonly ['text', 'image']\n}\n";
+    expect(fixables("meta.ts", map)).toEqual([]);
+    const py = "P = {\n    'o1': S(a=1),\n    # GPT-5 reasons by default\n    'gpt-5': S(a=2),\n}\n";
+    expect(fixables("profiles.py", py)).toEqual([]);
+    // A ternary between two IDs is still a value.
+    expect(fixables("c.ts", 'const c = { model: fast ? "gpt-5-nano" : "gpt-5" };\n')).not.toEqual([]);
+  });
+
+  it("holds JSON pricing rows whose prices sit in nested rules, and skips Swift Tests/ folders", async () => {
+    const json = '[\n  {\n    "model_name": "gpt-5",\n    "rules": [\n      { "service_kind": "llm_input", "unit_price": "0.00125" }\n    ]\n  }\n]\n';
+    expect(fixables("seed/llm_pricing.json", json)).toEqual([]);
+    const root = await mkdtemp(join(tmpdir(), "od11-"));
+    try {
+      await mkdir(join(root, "Tests", "OpenAITests"), { recursive: true });
+      await writeFile(join(root, "Tests", "OpenAITests", "Decoder.swift"), 'let m = "gpt-5"\n');
+      const result = await scanDirectory(root, { providers: ["openai"], today: TODAY });
+      expect(result.findings).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads config templates (terraform.tfvars.example) as the file they stand for", () => {
+    expect(ids("_infra/terraform.tfvars.example", 'LIVE_VOICE_GATE_MODEL="gpt-5-mini"\n')).toEqual(["1:gpt-5-mini"]);
+    expect(ids("conf/app.yml.sample", "model: gpt-5\n")).toEqual(["1:gpt-5"]);
+  });
+
+  it("independent review regressions: requests stay visible and swappable", async () => {
+    const swaps = (file: string, text: string) => scan(file, text).findings.filter((f) => f.fixable).length;
+    // Nested strings and keys are not prefix-list items.
+    expect(swaps("a.py", 'c.chat.completions.create(model="gpt-5", messages=m, extra_body={"reasoning": {"effort": "high"}})\n')).toBe(1);
+    expect(swaps("b.py", 'c.responses.create(model="gpt-5", input=q, text={"format": {"name": "codex"}})\n')).toBe(1);
+    expect(swaps("c.py", 'c.chat.completions.create(model="gpt-5", messages=[{"role": "user", "content": "o"}])\n')).toBe(1);
+    expect(swaps("d.json", '{"model": "gpt-5", "reasoning": {"effort": "low"}}\n')).toBe(1);
+    // A wrapper with a positional number around the call is not a price row.
+    expect(swaps("e.py", 'r = await asyncio.wait_for(c.chat.completions.create(model="gpt-5", messages=m), 30)\n')).toBe(1);
+    // max_output_tokens is a request parameter, and keys inside nested dicts or strings don't make a catalog.
+    expect(swaps("f.py", 'r = c.responses.create(model="gpt-5", input=q, max_output_tokens=2048)\n')).toBe(1);
+    expect(swaps("g.ts", 'const r = await c.responses.create({ model: "gpt-5", input, max_output_tokens: 100 });\n')).toBe(1);
+    expect(swaps("h.py", 'llm = ChatOpenAI(model_name="gpt-5", default_headers={"X-Label": "web"})\n')).toBe(1);
+    // JS function bodies are blocks, not sets.
+    const js = 'export async function run(cheap) {\n  let model = "gpt-5";\n  if (cheap) model = "gpt-5-mini";\n  return c.responses.create({ model, input });\n}\n';
+    expect(swaps("i.ts", js)).toBe(2);
+    // The name before `=` is `model`, not the earlier parameter `use_gpt5`.
+    expect(swaps("j.py", 'def run(use_gpt5: bool, model="gpt-5"):\n    return c.responses.create(model=model, input="x")\n')).toBeGreaterThan(0);
+    // A block comment inside a ternary doesn't turn the first branch into a key.
+    expect(fixed("k.ts", 'const c = { model: fast ? /* cheap */ "gpt-5-mini" : "gpt-5-mini" };\n'))
+      .toBe('const c = { model: fast ? /* cheap */ "gpt-6.1-terra" : "gpt-6.1-terra" };\n');
+    // A/B and load tests call the real API; C# MyApp.Tests folders are tests.
+    const root = await mkdtemp(join(tmpdir(), "od11-"));
+    try {
+      await mkdir(join(root, "src", "ab-tests"), { recursive: true });
+      await mkdir(join(root, "MyApp.Tests"), { recursive: true });
+      await writeFile(join(root, "src", "ab-tests", "experiment.py"), 'MODEL = "gpt-5"\n');
+      await writeFile(join(root, "MyApp.Tests", "Foo.cs"), 'var m = "gpt-5";\n');
+      const result = await scanDirectory(root, { providers: ["openai"], today: TODAY });
+      expect(result.findings.map((f) => f.file)).toEqual(["src/ab-tests/experiment.py"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads code inside a help string as an example, not a setting", () => {
+    expect(ids("lm.py", 'raise ValueError("`dspy.LM(...)`, e.g., dspy.LM(\'openai/gpt-5\', temperature=1.0)")\n'))
+      .toEqual([]);
+  });
+
+  it("knows agno OpenAIResponses is the Responses API, so tools don't hold the swap", () => {
+    const text = [
+      "from agno.models.openai import OpenAIResponses, OpenAIChat",
+      'a = Agent(model=OpenAIResponses(id="gpt-5-mini"), tools=[search])',
+      'b = Agent(model=OpenAIChat(id="gpt-5-mini"), tools=[search])',
+      'c = Agent(model=OpenAIResponses(id="gpt-5"), temperature=0.2)',
+      "",
+    ].join("\n");
+    expect(fixables("agent.py", text)).toEqual([2]);
+    expect(fixed("agent.py", text).split("\n")[1]).toBe('a = Agent(model=OpenAIResponses(id="gpt-6.1-terra"), tools=[search])');
+  });
+
+  it("skips Storybook mocks and visual-test fixtures like other test files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "od11-"));
+    try {
+      await mkdir(join(root, ".storybook", "mocks"), { recursive: true });
+      await mkdir(join(root, "packages", "chat-visual-tests", "pages"), { recursive: true });
+      await writeFile(join(root, ".storybook", "mocks", "config.ts"), 'export const m = { gateModel: "gpt-5-mini" };\n');
+      await writeFile(join(root, "packages", "chat-visual-tests", "pages", "fixtures.ts"), 'const modelId = "gpt-5-nano";\n');
+      await writeFile(join(root, "app.ts"), 'const model = "gpt-5-nano";\n');
+      const result = await scanDirectory(root, { providers: ["openai"], today: TODAY });
+      expect(result.findings.map((f) => f.file)).toEqual(["app.ts"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

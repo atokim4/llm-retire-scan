@@ -83,7 +83,7 @@ export interface ScanOptions {
 const ISSUE_TEMPLATES = /^\.github[\\/](?:ISSUE_TEMPLATE|PULL_REQUEST_TEMPLATE)/i;
 /** Django / Alembic migrations record history: rewriting the model names there changes nothing. */
 const MIGRATIONS = /(?:^|[\\/])(?:migrations|alembic[\\/]versions)[\\/][^\\/]+\.py$/;
-const TEST_DIR = /(?:^|[\\/])(?:tests?|__tests__|spec|e2e|fixtures?|__mocks__|cassettes)[\\/]/;
+const TEST_DIR = /(?:^|[\\/])(?:tests?|__tests__|spec|e2e|fixtures?|__mocks__|mocks|cassettes|\.storybook|[\w.-]*(?:visual|e2e|unit|integration)-tests|[\w.]+\.Tests)[\\/]/i;
 const TEST_FILE = /(?:^|[\\/])(?:test_[^\\/]*\.py|[^\\/]*_test\.(?:py|go)|[^\\/]*\.(?:test|spec)\.[cm]?[jt]sx?|conftest\.py)$/;
 
 /** Whether a path (relative to the scan root) is a test, fixture or mock file. */

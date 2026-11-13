@@ -106,7 +106,12 @@ Responses, since it can't see which API the wrapper calls. That includes the def
 another file (`OPENAI_MODEL=gpt-5` in `.env` stays when a call reading it sends tools on Chat Completions). It never
 swaps fine-tunes, image and audio models, already-retired IDs, IDs used as dict/YAML keys (price and limit tables:
 swapping them would merge rows), or lists that name several models (including a JSON line with a model and its
-fallbacks). After `--fix`, only what it could not rewrite is listed.
+fallbacks). The same goes for catalog and price entries (`{ id: "gpt-5", label: "GPT-5" }`, `name:` next to
+`context_window` or `pricing`, `tokenPriced("openai", "gpt-5", 1.25, 10)`, `Model("o3", 200000)`), constants named
+after the model (`GPT_5_MINI = "gpt-5-mini"`: the value would change and the name wouldn't), TS type-map keys,
+`Literal[...]` name lists and lookups like `MODELS["gpt-5"]`. Those are reported with what to do instead.
+agno's `OpenAIResponses(id=...)` counts as a Responses call, so tools next to it don't hold the swap.
+After `--fix`, only what it could not rewrite is listed.
 
 Model strings in the `openai:` form (pydantic-ai, LangChain `init_chat_model`) are reported but never swapped:
 those frameworks register tools and settings elsewhere (`@agent.tool`, `model_settings`). An options dict that several
@@ -119,7 +124,9 @@ object built by another class (`Settings(model=...).model`), and argument lists 
 "o3", "-o", "temperature", "0"]`). Read the diff before you commit it.
 
 It skips test files, fixtures, mocks, migrations, issue templates, Markdown/docs, changelogs, comments, docstrings,
-and strings that read as prose or test a name (`startswith("gpt-4o")`, `"gpt-4o" in name`, tiktoken lookups). A bare
+and strings that read as prose, regexes (`r"^gpt-5\.1$"`) or name tests (`startswith("gpt-4o")`, `"gpt-4o" in name`,
+`model == "gpt-5"`, Go's `strings.HasPrefix`, prefix lists like `["gpt", "o1", "o3"]`, tiktoken lookups). Config
+templates (`terraform.tfvars.example`, `app.yml.sample`) are read as the file they stand for. A bare
 `o1` / `o3` counts only as the whole value of a model setting (`model="o3"`, `REASONING_MODEL = "o3"`), so
 `pollutant = "o3"` or `["o1", "o2", "o3"]` stay quiet. Put
 `llm-retire-scan: ignore` in a comment at the end of a line, or on its own comment line just above, to silence it.
@@ -156,6 +163,18 @@ Example on a small app (`--today 2026-11-14`):
 
 5 urgent: the model is already off or shuts down within 30 days.
 ```
+
+## Tried on 41 public repos (the Dec 1 / Dec 11 rules, v0.3)
+
+Shallow clones of 41 licensed public repos pushed between August and November 2026 (agent frameworks, chat UIs,
+Telegram and Discord bots, SDKs, image tools). I read every finding about the Dec 1 and Dec 11 shutdowns in its
+source line. 641 findings in 28 repos: 351 requests or defaults that stop working (332 swapped by `--fix`, 19 left
+with the reason), 274 catalog / price / enum entries (reported, held), 11 third-party gateway defaults, 2 capability
+checks, 2 aliases and 1 false positive (an Azure deployment name in an `.env.example`). I disagree with 6 of the
+339 swaps: 4 CometAPI gateway defaults, that Azure name, and a YAML list of connection models.
+The run changed the scanner: 43 non-request findings went (18 regexes in one repo, Go prefix checks, comparisons,
+prefix lists), 127 swaps that would have rewritten a table row or a model-named constant are now held, and 90 agno
+Responses examples became fixable.
 
 ## Tried on 21 public repos (the GPT-4o rules, v0.1)
 

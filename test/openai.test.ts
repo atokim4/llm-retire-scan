@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { describeOpenAIModel } from "../src/openai/describe.ts";
 import { applyEdits, scanDirectory, scanText } from "../src/scan.ts";
 
-const scan = (file: string, text: string) => scanText(file, text, ["openai"]);
+const TODAY = "2026-11-14";
+const scan = (file: string, text: string) => scanText(file, text, ["openai"], undefined, TODAY);
 const rules = (file: string, text: string) => scan(file, text).findings.map((f) => `${f.line}:${f.rule}`);
 const fixed = (file: string, text: string) => applyEdits(text, scan(file, text).edits);
 
@@ -302,7 +303,7 @@ describe("fixes", () => {
 
 describe("describeOpenAIModel", () => {
   it("explains retiring, retired, replacement and unknown IDs", () => {
-    expect(describeOpenAIModel("gpt-4o-mini")).toContain("shuts down on 2027-01-14; replacement gpt-6-luna");
+    expect(describeOpenAIModel("gpt-4o-mini", TODAY)).toContain("shuts down on 2027-01-14 (in 61 days); replacement gpt-6-luna");
     expect(describeOpenAIModel("gpt-4")).toContain("shut down on 2026-10-23");
     expect(describeOpenAIModel("gpt-6-luna")).toContain('reasoning_effort "none"');
     expect(describeOpenAIModel("gpt-5.6-terra")).toContain("not on the OpenAI shutdown list");

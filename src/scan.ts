@@ -2,7 +2,8 @@ import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
 import { scanAnthropic } from "./anthropic/scan.ts";
-import { type RepoDefaults, collectDefaults, scanOpenAI } from "./openai/scan.ts";
+import { type Link, type RepoDefaults, collectDefaults, scanOpenAI, settle } from "./openai/scan.ts";
+import { lineOf } from "./source.ts";
 import type { Edit, Finding, Provider } from "./types.ts";
 
 export const PROVIDERS: readonly Provider[] = ["openai", "anthropic"];
@@ -24,18 +25,27 @@ const MAX_LINE_LENGTH = 2_000;
 export interface FileResult {
   findings: Finding[];
   edits: Edit[];
+  /** "<file>:<line>" model defaults in other files that --fix must leave (see OpenAIScan.holds). */
+  holds: string[];
+  /** Inserts that depend on an ID swap (see `settle`). */
+  links: Link[];
 }
 
-/** Scans one file's text for the chosen providers. `file` labels findings and picks the language. */
+/**
+ * Scans one file's text for the chosen providers. `file` labels findings and picks the language;
+ * `today` (YYYY-MM-DD, default: the current UTC date) sets how close each shutdown is.
+ */
 export function scanText(
-  file: string, text: string, providers: readonly Provider[] = PROVIDERS, defaults?: RepoDefaults,
+  file: string, text: string, providers: readonly Provider[] = PROVIDERS, defaults?: RepoDefaults, today?: string,
 ): FileResult {
-  const result: FileResult = { findings: [], edits: [] };
+  const result: FileResult = { findings: [], edits: [], holds: [], links: [] };
   if (/\.min\.[cm]?js$/.test(file)) return result;
   if (providers.includes("openai") && !text.split("\n").some((l) => l.length > MAX_LINE_LENGTH)) {
-    const openai = scanOpenAI(file, text, defaults);
+    const openai = scanOpenAI(file, text, defaults, today);
     result.findings.push(...openai.findings);
     result.edits.push(...openai.edits);
+    result.holds.push(...openai.holds);
+    result.links.push(...openai.links);
   }
   if (providers.includes("anthropic")) result.findings.push(...scanAnthropic(file, text));
   result.findings.sort((a, b) => a.line - b.line);
@@ -65,6 +75,8 @@ export interface ScanOptions {
   fix?: boolean;
   /** Also scan test files (mocked requests never reach the API, so they are skipped by default). */
   includeTests?: boolean;
+  /** YYYY-MM-DD to measure shutdown dates from (default: the current UTC date). */
+  today?: string;
 }
 
 /** Issue and PR templates ask reporters which model they used: prose, not configuration. */
@@ -103,12 +115,22 @@ export async function scanDirectory(root: string, options: ScanOptions = {}): Pr
   }
 
   // Second pass: a call in one file can take its model from a default set in another.
+  const scanned = files.map((f) => ({ ...f, ...scanText(f.file, f.text, options.providers, defaults, options.today) }));
+  // A default (`OPENAI_MODEL=gpt-5` in .env) read by a call that can't run on the replacement as it is stays.
+  const holds = new Set(scanned.flatMap((s) => s.holds));
   const result: DirectoryResult = { findings: [], fixed: [] };
-  for (const { path, file, text } of files) {
-    const { findings, edits } = scanText(file, text, options.providers, defaults);
+  for (const { path, file, text, findings, edits, links } of scanned) {
+    const held = (line: number) => holds.has(`${file}:${line}`);
+    for (const f of findings) {
+      if (f.fixable && f.rule === "shutdown" && held(f.line)) {
+        f.fixable = false;
+        f.message += " --fix leaves it: a call that reads this default has to change first (see its finding).";
+      }
+    }
+    const kept = settle(text, edits.filter((e) => !held(lineOf(text, e.start))), findings, links);
     result.findings.push(...findings);
-    if (options.fix && edits.length > 0) {
-      await writeFile(path, applyEdits(text, edits));
+    if (options.fix && kept.length > 0) {
+      await writeFile(path, applyEdits(text, kept));
       result.fixed.push(file);
     }
   }

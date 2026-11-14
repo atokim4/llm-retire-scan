@@ -64,6 +64,44 @@ describe("code patterns", () => {
     expect(rules("openai.py", "budget_tokens = 2048\n")).toEqual([]);
   });
 
+  it("in a file that also talks to other providers, flags only lines in a Claude block", () => {
+    const registry = [
+      'gpt5 = LLM(name="gpt-5",',
+      "           temperature=None)",
+      "",
+      'gemini = LLM(name="gemini-2.5-pro",',
+      "             temperature=0.7)",
+      "",
+      'sonnet = LLM(name="claude-sonnet-5-5",',
+      "             temperature=0)",
+      "",
+    ].join("\n");
+    expect(rules("llm.py", registry)).toEqual(["8:sampling"]);
+
+    const reader = [
+      "if 'gemini' in model:",
+      "    llm = ChatGoogleGenerativeAI(model=model,",
+      "                                 temperature=t)",
+      "    ",
+      "elif 'gpt' in model:",
+      "    llm = ChatOpenAI(model=model, temperature=t)",
+      "",
+      "elif 'claude' in model:",
+      "    llm = ChatAnthropic(",
+      "        temperature=t,",
+      "        model=model)",
+      "",
+    ].join("\n");
+    expect(rules("reader.py", reader)).toEqual(["10:sampling"]);
+    // Responses output[0].content[0].text in a mixed file is an OpenAI read, not a Claude one.
+    expect(rules("mix.py", "import openai, anthropic\n\ntext = r.output[0].content[0].text\n")).toEqual([]);
+  });
+
+  it("keeps the file-wide reading in a Claude-only file", () => {
+    const text = "import anthropic\n\nparams = dict(\n    temperature=0.3,\n)\n";
+    expect(rules("only.py", text)).toEqual(["4:sampling"]);
+  });
+
   it("skips comment lines", () => {
     const text = "// claude\n// set temperature: 1 here\n# content[0].text was the old way\n";
     expect(rules("x.ts", text)).toEqual([]);

@@ -24,6 +24,27 @@ const THINKING_BUDGET = /(?<![\w-])["']?(budget_tokens|budgetTokens|BudgetTokens
 /** A line that is only a comment (`#`, `//`, `/*`, `*`): its text describes code, it isn't code. */
 const COMMENT_LINE = /^\s*(?:#|\/\/|\/\*|\*)/;
 const MENTIONS_CLAUDE = /anthropic|claude/i;
+/** Another LLM provider named in the same file: then a line needs Claude in its own block. */
+const MENTIONS_OTHER_PROVIDER = /openai|gpt-|gemini|genai|mistral|ollama|groq|cohere|deepseek/i;
+/** How far a block reaches up or down from a line, at most. */
+const BLOCK_REACH = 12;
+const BLANK_LINE = /^\s*$/;
+
+/**
+ * Whether the block around `index` (the run of non-blank lines it sits in, capped at
+ * BLOCK_REACH lines each way) names Claude: the `ChatAnthropic(` or `name="claude-..."`
+ * a sampling line belongs to.
+ */
+function blockMentionsClaude(lines: string[], index: number): boolean {
+  for (const step of [-1, 1]) {
+    for (let i = index, n = 0; i >= 0 && i < lines.length && n <= BLOCK_REACH; i += step, n += 1) {
+      const content = lines[i] ?? "";
+      if (BLANK_LINE.test(content)) break;
+      if (MENTIONS_CLAUDE.test(content)) return true;
+    }
+  }
+  return false;
+}
 
 function noticeFinding(file: string, line: number, id: string): Finding | null {
   const notice = MODEL_NOTICES.get(id.toLowerCase());
@@ -45,6 +66,9 @@ export function scanAnthropic(file: string, text: string): Finding[] {
   const findings: Finding[] = [];
   const isCode = CODE_EXTENSIONS.has(extname(file).toLowerCase());
   const mentionsClaude = MENTIONS_CLAUDE.test(text);
+  // In a file that also talks to other providers, a temperature line next to a
+  // Gemini or GPT entry isn't a Claude call: look for Claude in the line's own block.
+  const multiProvider = mentionsClaude && MENTIONS_OTHER_PROVIDER.test(text);
   const lines = text.split(/\r?\n/);
 
   lines.forEach((content, index) => {
@@ -57,6 +81,7 @@ export function scanAnthropic(file: string, text: string): Finding[] {
     }
 
     if (!isCode || !mentionsClaude || COMMENT_LINE.test(content)) return;
+    if (multiProvider && !blockMentionsClaude(lines, index)) return;
 
     if (FIRST_BLOCK_TEXT.test(content)) {
       findings.push({

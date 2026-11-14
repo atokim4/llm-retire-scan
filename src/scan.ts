@@ -3,10 +3,11 @@ import { basename, join, relative } from "node:path";
 
 import { scanAnthropic } from "./anthropic/scan.ts";
 import { type Link, type RepoDefaults, collectDefaults, scanOpenAI, settle } from "./openai/scan.ts";
+import { scanPerspective } from "./perspective/scan.ts";
 import { lineOf } from "./source.ts";
 import type { Edit, Finding, Provider } from "./types.ts";
 
-export const PROVIDERS: readonly Provider[] = ["openai", "anthropic"];
+export const PROVIDERS: readonly Provider[] = ["openai", "anthropic", "perspective"];
 
 const SKIP_DIRS = new Set([
   ".git", "node_modules", "dist", "build", ".next", ".nuxt", "out", "coverage",
@@ -48,6 +49,7 @@ export function scanText(
     result.links.push(...openai.links);
   }
   if (providers.includes("anthropic")) result.findings.push(...scanAnthropic(file, text));
+  if (providers.includes("perspective")) result.findings.push(...scanPerspective(file, text, today));
   result.findings.sort((a, b) => a.line - b.line);
   return result;
 }

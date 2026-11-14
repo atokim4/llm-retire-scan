@@ -1,7 +1,8 @@
 # llm-retire-scan
 
-A command-line scanner for OpenAI and Claude model IDs that are shut down or about to be, and for the request
-settings that break when you swap in the replacement. The OpenAI dates it knows, from the
+A command-line scanner for OpenAI and Claude model IDs that are shut down or about to be, for the request
+settings that break when you swap in the replacement, and for calls to Google's Perspective API (it answers until
+2026-12-31). The OpenAI dates it knows, from the
 [deprecations page](https://developers.openai.com/api/docs/deprecations) as of 2026-11-14:
 
 | Shutdown | Models | Replacement |
@@ -84,6 +85,18 @@ says where the default was found.
 `thinking.budget_tokens` that Claude Opus 4.7+ rejects, and `content[0].text` reads that miss the text block when
 thinking comes first.
 
+**Perspective API** (`--provider perspective`): Google's Perspective (Comment Analyzer) API answers until **2026-12-31**
+([perspectiveapi.com](https://perspectiveapi.com/)). Rules: `endpoint` (a hard-coded `commentanalyzer.googleapis.com`
+URL or host), `google-client` (the Google API client for the service: `discovery.build("commentanalyzer", ...)` with
+its discovery URL, `google.commentanalyzer(...)`, `commentanalyzer_v1alpha1`), `client-package` (npm
+`perspective-api-client` and `@conversationai/perspectiveapi-js-client`, PyPI `perspective` and `perspectiveapi`,
+Composer `bredmor/comment-analyzer` and `freema/perspective-api-bundle`, gem `google_perspective`),
+`endpoint-default` (a warning: the URL is the fallback of a setting lookup such as `os.getenv("X", "https://...")`,
+or the value of a name that says it is a default, like `TOXICITY_ENDPOINT_DEFAULT =` or YAML `default:`) and
+`api-key` (a warning, only when nothing else in the file points at the API). Prose files (Markdown, reST, plain
+text, HTML), comments and docstrings (a block string that stands alone as a statement) are skipped.
+There is no `--fix` for these: the change is making the base URL configurable, then picking a replacement.
+
 ## What `--fix` rewrites
 
 It swaps a model string only where the request stays valid on the replacement, and prints everything else as a
@@ -146,7 +159,7 @@ node src/cli.ts . --provider openai --fail-on warn     # CI gate, OpenAI rules o
 node src/cli.ts --model gpt-5-mini --model gpt-6.1-sol # what the tool knows about an ID
 ```
 
-Options: `--provider openai,anthropic` (default both), `--include-tests`, `--fail-on error|warn|never`,
+Options: `--provider openai,anthropic,perspective` (default all three), `--include-tests`, `--fail-on error|warn|never`,
 `--today YYYY-MM-DD`.
 Exit codes: 0 clean, 1 findings at or above `--fail-on`, 2 bad usage.
 
@@ -163,6 +176,20 @@ Example on a small app (`--today 2026-11-14`):
 
 5 urgent: the model is already off or shuts down within 30 days.
 ```
+
+## Tried on 32 public repos (the Perspective rules, v0.4)
+
+32 public repos that mention Perspective and were pushed between November 2025 and November 2026 (eval harnesses,
+moderation bots, forum plugins, research scripts), scanned at their branch heads on 2026-11-14 and checked by hand.
+24 call Google's Perspective API from non-test code; the other 8 mention it in docs only, removed the call, or are
+replacements. Each of the 24 gets at least one `endpoint`, `google-client` or `endpoint-default` finding. Of 34
+such findings in the final version, 2 lines are false positives (a root-level `test.js` that isn't matched as a
+test file) and 1 has the wrong severity (a Ruby constant that is the fallback of a site setting, reported as
+hard-coded). 4 of the 24 already let you change the host; 20 hard-code it.
+The run changed the rules: a multi-line `discovery.build(...)` is reported once, on the URL line; names and keys
+that say "default" are `endpoint-default` warnings; docstrings and trailing comments are skipped. A review with
+probe inputs then caught a URL being called a default because the API key on the same line came from the
+environment; only a lookup's fallback counts now.
 
 ## Tried on 41 public repos (the Dec 1 / Dec 11 rules, v0.3)
 
@@ -200,7 +227,8 @@ npm run check   # tsc --noEmit (strict) + vitest
 ```
 
 `src/source.ts` is a small Python/JS lexer (strings, comments, brackets). `src/openai/` holds the model table and the
-call-site rules. `src/anthropic/` holds the Claude rules. Tests live in `test/`.
+call-site rules. `src/anthropic/` holds the Claude rules, `src/perspective/` the Perspective API rules. Tests live in
+`test/`.
 
 ## Licence
 

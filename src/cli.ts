@@ -6,7 +6,7 @@ import { describeOpenAIModel } from "./openai/describe.ts";
 import { PROVIDERS, scanDirectory } from "./scan.ts";
 import type { Finding, Provider } from "./types.ts";
 
-const USAGE = `Usage: node src/cli.ts [dir or file] [--provider openai,anthropic] [--fix] [--include-tests] [--json] [--fail-on error|warn|never] [--today YYYY-MM-DD]
+const USAGE = `Usage: node src/cli.ts [dir or file] [--provider openai,anthropic,perspective] [--fix] [--include-tests] [--json] [--fail-on error|warn|never] [--today YYYY-MM-DD]
        node src/cli.ts --model <id> [--model <id> ...]
 
 Scans a directory (default: .) or one file for OpenAI and Claude model IDs that are shut down or shutting
@@ -17,6 +17,7 @@ reasoning model, "minimal" effort, pro mode, max_tokens, sampling on Claude 4.7+
 gpt-5-mini -> gpt-6.1-terra, gpt-5-nano and gpt-4o / gpt-4.1 -> gpt-6-luna), adds reasoning_effort "none"
 where a call sends tools or sampling settings the target allows only at none, and moves gpt-5-pro / o3-pro
 Responses calls to gpt-6.1-sol with reasoning.mode "pro". Everything else is printed as a manual change.
+--provider perspective reports calls to Google's Perspective API, which answers until 2026-12-31 (report only).
 Shutdowns within 30 days (or past) are marked urgent; more than 90 days out they are warnings.
 Test, fixture and mock files are skipped unless --include-tests is given.
 Exit code: 1 when a finding at or above --fail-on (default: error) is left, 2 on bad usage.`;

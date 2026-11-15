@@ -207,6 +207,96 @@ The tests run both versions against a local fake Realtime server built from the
 SDK's event types (the Node client events are type-checked against `openai` 7.57). **It has not been run against
 the live API**: I had no key for it. Try it with your own key on a few sentences before you ship it.
 
+## Timestamps after February 26: `kits/timed-transcript`
+
+whisper-1 is the model that gave you timestamps. The speech-to-text guide says "the `timestamp_granularities[]`
+parameter is only supported for `whisper-1`" and that existing integrations "can use the deprecated `whisper-1`
+model for word or segment timestamps until February 26, 2027". The gpt-transcribe model page lists no timestamp
+option, and the API reference names no response formats for it, so `srt`, `vtt` and `verbose_json` callers have no
+documented equivalent. (Checked 2026-11-15, docs only.) A user of the Silo media server replayed its whisper-style
+request with `model=gpt-transcribe` and got HTTP 400: "response_format 'verbose_json' is not compatible with model
+'gpt-transcribe-api-ev3'. Use 'json' or 'text' instead."
+([Silo-Server/silo-server#3518](https://github.com/Silo-Server/silo-server/issues/3518), their call, not mine.)
+
+This kit gets segment timestamps back without asking the model for them. It finds the speech locally, sends each
+segment to gpt-transcribe as its own request, and puts the segment's offset on the text it gets back:
+
+1. Decode to mono PCM. WAV is read directly (8/16/24/32-bit integer or 32-bit float, any channel count); anything
+   else goes through `ffmpeg` if it's installed, and fails with a `needs_ffmpeg` error if it isn't.
+2. Energy VAD: 10 ms frames after a 250-3500 Hz band-pass, smoothed over three frames. A frame is speech when it
+   is 3 dB over the file's noise floor (the 10th-percentile frame), but never more than 36 dB under its loud frames.
+   Pauses under 350 ms are closed, blips under 150 ms dropped, and a segment over 15 s is cut at its quietest 50 ms.
+3. One `/v1/audio/transcriptions` request per segment (multipart, `model=gpt-transcribe`, `response_format=json`,
+   `languages[]` and `keywords[]` encoded the way the openai SDK encodes arrays), with 200 ms of padding, at most 4
+   in flight, retries on 408/409/429/5xx and network errors (honouring `Retry-After`), a per-request timeout, and an
+   abort that stops the rest.
+4. SRT, WebVTT, or the part of whisper's `verbose_json` it can fill honestly (`task`, `language`, `duration`, `text`,
+   `segments[{id, start, end, text}]`). It leaves out `tokens`, `avg_logprob`, `no_speech_prob` and `words`.
+
+```ts
+import { transcribeTimed, toSrt, toVerboseJson } from "./kits/timed-transcript/src/index.ts";
+
+const result = await transcribeTimed("interview.mp3", { languages: ["en"] });
+await writeFile("interview.srt", toSrt(result));
+```
+
+```python
+from timed_transcript import transcribe_timed, to_vtt   # Python 3.10+, standard library only
+
+result = transcribe_timed("interview.wav", languages=["ru", "uz"])
+```
+
+The Python file is a twin of the Node code, not a wrapper: same filter, thresholds and rounding. On all 14 benchmark
+files below the two return identical segments, to the millisecond.
+
+Times are computed from the frame length in samples, so 22.05 and 11.025 kHz files don't drift (a test puts one
+second of speech after 10 minutes of silence at those rates). Bad settings fail early: `maxSegmentSec` under 1 s or a
+`concurrency` that isn't a whole number of at least 1 throw instead of sending a request per word or none at all.
+The Python VAD is plain Python: one clip's 7 benchmark files (14 minutes of audio) take about 7 s. In Python, `cancel`
+returns right away but a request already sent runs on in its thread until its `timeout`.
+
+What it can't do: word timestamps, or a cue split inside a sentence spoken without a pause. The times are where the
+VAD heard speech start and stop, not an alignment of the words. Starts come out about 10 ms early and ends about
+20 ms late (the smoothing and the filter), which the padding covers. Where a segment over 15 s is cut, the two
+requests meet with no padding, so a word right at the cut can be clipped; the cut sits at the quietest 50 ms to make
+that unlikely. Music or a second voice in the background
+counts as speech.
+
+### How close the boundaries are
+
+Two 120 s excerpts of public-domain LibriVox readings (Stevenson's "The Song of the Morrow" and O. Henry's "The Gift
+of the Magi"), decoded to 16 kHz mono. The reference pauses come from a different tool on the clean file: ffmpeg's
+`silencedetect` at -45 dB and 0.35 s. Then white or pink noise is added at a fixed SNR against the speech.
+"Pause-edge error" compares each found pause's edges with the reference pause. "Speech sent" is the share of
+reference speech inside the audio windows that go to the API, so anything under 100% is speech that never reaches
+the model. I tuned the thresholds on the first clip and only ran the second once they were set. `bench/boundaries.ts`
+and `bench/parity.py` reproduce it.
+
+| clip | noise | pauses found | extra splits | pause-edge error ms, median / p90 | speech sent |
+|---|---|---|---|---|---|
+| Song of the Morrow (tuning) | clean | 26/26 | 2 | 13 / 563 | 99.2% |
+| | white 20 dB | 26/26 | 4 | 29 / 563 | 98.6% |
+| | white 10 dB | 26/26 | 16 | 91 / 585 | 94.0% |
+| | white 5 dB | 26/26 | 21 | 313 / 1327 | 83.9% |
+| | pink 10 dB | 26/26 | 10 | 83 / 563 | 95.5% |
+| | pink 5 dB | 26/26 | 21 | 143 / 752 | 91.8% |
+| Gift of the Magi (held out) | clean | 20/20 | 4 | 17 / 90 | 99.9% |
+| | white 20 dB | 20/20 | 4 | 41 / 120 | 99.7% |
+| | white 10 dB | 20/20 | 8 | 105 / 247 | 98.8% |
+| | white 5 dB | 20/20 | 13 | 125 / 287 | 97.6% |
+| | pink 10 dB | 20/20 | 7 | 93 / 240 | 99.0% |
+| | pink 5 dB | 20/20 | 10 | 115 / 257 | 98.2% |
+
+The band-pass made the biggest difference. The first version measured raw energy with a two-level threshold, and on
+the held-out clip at white 5 dB it sent 77.6% of the speech in 65 segments. It also lost a 15 s stretch of soft
+reading on the first clip at 10 dB. On clean audio all 6 extra splits are real pauses
+the reference skipped: 0.36 to 0.51 s gaps whose level averages -48 to -60 dBFS (the speech averages -23 to -25),
+but with a peak above -45 dB somewhere inside. In loud noise the extra
+splits fall inside phrases, which costs the model some context on those segments.
+
+**Not run against the live API**: I had no key. The tests use a local fake `/v1/audio/transcriptions` that parses
+the multipart body and checks every field. Try a few files with your own key before you switch.
+
 ## Run it
 
 Node 22.18 or newer runs the TypeScript directly, so you run it from a clone (it isn't published to npm). There are
@@ -302,6 +392,11 @@ npm run check   # tsc --noEmit (strict) + vitest
 
 cd kits/speech-over-realtime && npm ci && npm run check          # Node speak(), against the fake server
 cd python && python -m pip install -r requirements.txt pytest && python -m pytest
+
+cd kits/timed-transcript && npm ci && npm run check              # Node, against the fake transcription API
+python3 -m unittest discover -s python                           # Python twin, standard library only
+FFMPEG=$(command -v ffmpeg) npm test                             # also runs the ffmpeg decode test
+node bench/boundaries.ts clip.wav "$(command -v ffmpeg)" /tmp/out && python3 bench/parity.py /tmp/out
 ```
 
 `src/source.ts` is a small Python/JS lexer (strings, comments, brackets). `src/openai/` holds the model table and the

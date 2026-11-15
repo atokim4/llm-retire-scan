@@ -24,6 +24,7 @@ describe("Speech API calls", () => {
     expect(finding?.message).toContain("2027-01-06 (in 52 days)");
     expect(finding?.message).toContain('voice "nova" is not one of the Realtime voices');
     expect(finding?.message).toContain("the mp3 this call gets needs its own encoder");
+    expect(finding?.message).toContain("kits/speech-over-realtime");
     // The model ID keeps its own finding, which now says the endpoint changes too.
     const id = scan("tts.py", text).findings.find((f) => f.rule === "audio-shutdown");
     expect(id?.message).toContain("only on the Realtime API");
@@ -101,6 +102,7 @@ describe("transcription calls", () => {
     expect(finding?.message).toContain("timestamp_granularities is supported only on whisper-1");
     expect(finding?.message).toContain("`languages` (a list) in place of `language`");
     expect(finding?.message).toContain('response_format "verbose_json"');
+    expect(finding?.message).toContain("kits/timed-transcript");
   });
 
   it("reads requests.post(..., data={...}) to the raw endpoint", () => {
@@ -113,6 +115,15 @@ describe("transcription calls", () => {
       ")",
     ].join("\n");
     expect(callFindings("raw.py", text)[0]?.message).toContain('response_format "srt"');
+  });
+
+  it("points at the timestamp kit only when the call wanted timestamps or subtitles", () => {
+    const languageOnly = 'client.audio.transcriptions.create(model="whisper-1", file=f, language="uz")';
+    const [finding] = callFindings("lang.py", languageOnly);
+    expect(finding?.message).toContain("`languages`");
+    expect(finding?.message).not.toContain("kits/timed-transcript");
+    const vtt = 'client.audio.transcriptions.create(model="whisper-1", file=f, response_format="vtt")';
+    expect(callFindings("vtt.py", vtt)[0]?.message).toContain("kits/timed-transcript");
   });
 
   it("reads a FormData body built just before a fetch wrapper (URL as the second argument)", () => {

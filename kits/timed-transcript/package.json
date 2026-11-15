@@ -1,0 +1,22 @@
+{
+  "name": "timed-transcript",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Segment timestamps, SRT and VTT on gpt-transcribe, for code that loses whisper-1's timestamp_granularities and srt/vtt/verbose_json on 2027-02-26",
+  "type": "module",
+  "license": "MIT",
+  "author": "Sunnatulla E",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  }
+}

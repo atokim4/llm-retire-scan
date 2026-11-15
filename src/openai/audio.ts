@@ -17,6 +17,12 @@ const SPEECH_ONLY_VOICES = new Set(["fable", "onyx", "nova"]);
 /** Formats shown only with whisper-1 in the speech-to-text guide; none is documented for gpt-transcribe. */
 const WHISPER_FORMATS = new Set(["verbose_json", "srt", "vtt"]);
 
+/** Where the fix lives, for the two changes a model swap can't make. */
+const SPEECH_KIT_HINT = "kits/speech-over-realtime in this repo has a speak() that does it over the Realtime API.";
+const TIMESTAMP_KIT_HINT =
+  "For segment timestamps and SRT/VTT on gpt-transcribe, kits/timed-transcript in this repo splits the audio with a " +
+  "local VAD and transcribes each segment.";
+
 type Endpoint = "speech" | "transcriptions";
 
 const SDK_CALLS: { re: RegExp; endpoint: Endpoint }[] = [
@@ -213,7 +219,7 @@ export function scanAudioCalls(file: string, src: Source, today: string): Findin
         `Speech API call: if it goes to OpenAI, /v1/audio/speech loses all of its models (tts-1, tts-1-hd, gpt-4o-mini-tts) on ` +
         `${SPEECH_DATE} (${whenText(days)}). The replacement, gpt-realtime-2.1-mini, isn't supported on that ` +
         "endpoint, so this call has to move to the Realtime API; a model swap won't do it." +
-        (notes.length ? ` Also: ${notes.join("; ")}.` : "")));
+        (notes.length ? ` Also: ${notes.join("; ")}.` : "") + ` ${SPEECH_KIT_HINT}`));
       continue;
     }
 
@@ -233,13 +239,16 @@ export function scanAudioCalls(file: string, src: Source, today: string): Findin
     if (get("language") && !sendsLanguages) {
       problems.push("gpt-transcribe takes `languages` (a list) in place of `language`; don't send both");
     }
+    const timestamps = Boolean(get("timestamp_granularities") || get("timestamp_granularities[]") || get("timestampGranularities"));
     const format = get("response_format")?.literal;
     if (format && WHISPER_FORMATS.has(format)) {
       problems.push(`response_format "${format}" isn't documented for gpt-transcribe (json and diarized_json are)`);
     }
     if (problems.length === 0) continue;
+    const needsTimes = timestamps || (format !== undefined && WHISPER_FORMATS.has(format));
     findings.push(finding("transcribe-params",
-      `${subject}, moving it to gpt-transcribe changes more than the ID: ${problems.join("; ")}.`));
+      `${subject}, moving it to gpt-transcribe changes more than the ID: ${problems.join("; ")}.` +
+      (needsTimes ? ` ${TIMESTAMP_KIT_HINT}` : "")));
   }
   return findings;
 }

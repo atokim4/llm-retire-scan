@@ -4,6 +4,7 @@ import {
   type Entry, type Language, type Source, CODE, entries, indentOf, lex, lineOf, matchingClose, enclosingOpen,
 } from "../source.ts";
 import type { Edit, Finding, Severity } from "../types.ts";
+import { scanAudioCalls } from "./audio.ts";
 import {
   type OpenAINotice, SOL_61, SOON_DAYS, TARGETS, type TargetRules, URGENT_DAYS, daysUntil, noticeFor, parseModelId,
   stripPrefix, todayUtc, whenText,
@@ -123,6 +124,7 @@ export function scanOpenAI(
         literalBlocker(src, literal.start, literal.end, literal.value));
     }
     analyzeCallSites(file, src, out, defaults, today);
+    out.findings.push(...scanAudioCalls(file, src, today));
   } else {
     const json = extname(file).toLowerCase() === ".json";
     let offset = 0;
@@ -547,8 +549,11 @@ function collectIds(
         "on the Image API (images.generate / images.edit; their model pages list Responses as not supported). " +
         'Leaving out the new complexity setting means "high". Pick one by hand; --fix leaves image IDs.'));
     } else if (notice.group === "audio") {
+      const realtimeOnly = notice.date === "2027-01-06"
+        ? " It runs only on the Realtime API, not /v1/audio/speech, so the call needs rewriting, not just the ID."
+        : "";
       out.findings.push(finding("audio-shutdown",
-        `${raw} ${when} (its own notice, not a text-model one). Replacement: ${notice.replacement}.`));
+        `${raw} ${when} (its own notice, not a text-model one). Replacement: ${notice.replacement}.${realtimeOnly}`));
     } else {
       out.findings.push(finding("retired", `${raw} ${when}. Replacement: ${notice.replacement}.`));
     }

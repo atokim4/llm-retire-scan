@@ -12,7 +12,7 @@ settings that break when you swap in the replacement, and for calls to Google's 
 | **2026-12-11** | gpt-5-mini(-2025-08-07) | gpt-6.1-terra |
 | **2026-12-11** | gpt-5-nano(-2025-08-07) | gpt-6-luna |
 | **2026-12-11** | gpt-5-pro(-2025-10-06), o3-pro(-2025-06-10) | gpt-6.1-sol with `reasoning.mode: "pro"`, Responses API only |
-| 2027-01-06 | tts-1, tts-1-hd, gpt-4o-mini-tts | gpt-realtime-2.1-mini |
+| 2027-01-06 | tts-1, tts-1-hd, gpt-4o-mini-tts | gpt-realtime-2.1-mini (Realtime API only, see below) |
 | 2027-01-14 | gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-mini (and snapshots) | gpt-6-luna |
 | 2027-01-20 | gpt-realtime, gpt-audio, their -mini models, gpt-4o audio/realtime | gpt-realtime-2.1(-mini), gpt-audio-1.5 |
 | 2027-02-10 | gpt-image-2 | gpt-image-2.6-sunburst or -flare |
@@ -81,6 +81,26 @@ on after the migration, and the parameters (including `**options` dicts and keys
 When the model only *might* be a retiring one (it comes from a variable set elsewhere), the finding is a `warn` that
 says where the default was found.
 
+**Audio calls** (Python and JS/TS, SDK `audio.speech.create` / `audio.transcriptions.create` and raw HTTP to
+`/v1/audio/speech` or `/v1/audio/transcriptions`). The request settings are read from the call itself, from an
+object inside it (`json={...}`), or from a form or dict passed by name and filled in earlier in the same function
+(`FormData.append/.set`, aiohttp `add_field`, `data["language"] = ...`, `kwargs = dict(...)` then `**kwargs`).
+Server routes (`@app.post(...)`, `router.post(...)`) and absolute URLs on hosts other than api.openai.com are
+skipped:
+
+- `openai/speech-endpoint`: every Speech API call. On 2027-01-06 the endpoint loses all three of its models, and
+  the replacement isn't served there ("`gpt-realtime-2.1-mini` isn't a supported model for `/v1/audio/speech`",
+  [text-to-speech guide](https://developers.openai.com/api/docs/guides/text-to-speech)), so the call has to move to
+  the Realtime API. The finding also says when the call asks for mp3/opus/aac/flac (the default is mp3; Realtime
+  sends PCM), uses `fable`, `onyx` or `nova` (not Realtime voices), or a `speed` outside 0.25 to 1.5.
+- `openai/transcribe-params`: a whisper-1 or gpt-4o transcribe call (off 2027-02-26) that sends something
+  gpt-transcribe treats differently, per the [speech-to-text guide](https://developers.openai.com/api/docs/guides/speech-to-text):
+  `timestamp_granularities` ("only supported for `whisper-1`"), `language` ("For `gpt-transcribe`, `languages`
+  replaces the singular `language` field"), or `verbose_json` / `srt` / `vtt` (the guide documents json and
+  diarized_json for it). One finding per call, listing all of them.
+
+Not seen: a URL kept in a class field or a variable and passed later (`fetch(this.endpoint, ...)`).
+
 **Claude** (`--provider anthropic`): retired and retiring Claude IDs, custom sampling settings and
 `thinking.budget_tokens` that Claude Opus 4.7+ rejects, and `content[0].text` reads that miss the text block when
 thinking comes first.
@@ -144,6 +164,49 @@ templates (`terraform.tfvars.example`, `app.yml.sample`) are read as the file th
 `pollutant = "o3"` or `["o1", "o2", "o3"]` stay quiet. Put
 `llm-retire-scan: ignore` in a comment at the end of a line, or on its own comment line just above, to silence it.
 
+## Speech after January 6: `kits/speech-over-realtime`
+
+A `speak()` function for Node (TypeScript, `ws`) and Python (`websockets`) that does what an `audio.speech.create`
+call did, over the Realtime API: one WebSocket session per call, `session.update` with audio output (PCM, 24 kHz)
+and the voice, the text as a `conversation.item.create`, then `response.create`. It collects the
+`response.output_audio.delta` chunks until `response.done` and hands back WAV bytes, the raw PCM and the model's own
+transcript.
+
+```ts
+import { speak, fromSpeechParams } from "./kits/speech-over-realtime/src/index.ts";
+
+const { wav, verbatim } = await speak({ text: "Your order has shipped.", voice: "marin" });
+// Or start from the body you sent to audio.speech.create; it throws on what can't carry over:
+const { format, ...options } = fromSpeechParams({ model: "tts-1", input, voice: "coral", response_format: "wav" });
+```
+
+```python
+from speak_realtime import speak, from_speech_params   # Python 3.11+, websockets 14+
+
+result = await speak("Your order has shipped.", voice="marin")
+kwargs, fmt = from_speech_params({"input": text, "voice": "coral", "response_format": "wav"})
+result = await speak(**kwargs)
+```
+
+Things that change, and that the kit is honest about:
+
+- gpt-realtime-2.1-mini is a conversational voice model, not a TTS engine. The session tells it to read the text
+  word for word. `verbatim` says whether its transcript matches your text (ignoring case and punctuation), so you
+  can retry or log when it adds a "Sure!".
+- Output is WAV or raw PCM16 (24 kHz mono). If your app plays or stores mp3/opus, encode it yourself (ffmpeg).
+  `fromSpeechParams` refuses an encoded `response_format` instead of quietly returning a different format.
+- `fable`, `onyx` and `nova` are Speech API voices only; `speed` goes 0.25 to 1.5 (the Speech API took up to 4.0).
+- Errors come back as `SpeakError` with a `code`: the server's `error` event, a response that ends `incomplete`,
+  `failed` or `cancelled` (`response_incomplete`...), a socket closed before `response.done` (`closed_early`), a
+  rejected handshake (`http_401`), a malformed event (`bad_event`) or audio that isn't PCM16 (`bad_audio`), and
+  `timeout`, which covers the whole call, handshake included. In Node an `AbortSignal` stops it (`aborted`); in
+  Python you cancel the task. The socket is dropped as soon as `response.done` arrives.
+
+The tests run both versions against a local fake Realtime server built from the
+[Realtime conversations guide](https://developers.openai.com/api/docs/guides/realtime-conversations) and the openai
+SDK's event types (the Node client events are type-checked against `openai` 7.57). **It has not been run against
+the live API**: I had no key for it. Try it with your own key on a few sentences before you ship it.
+
 ## Run it
 
 Node 22.18 or newer runs the TypeScript directly, so you run it from a clone (it isn't published to npm). There are
@@ -176,6 +239,18 @@ Example on a small app (`--today 2026-11-14`):
 
 5 urgent: the model is already off or shuts down within 30 days.
 ```
+
+## Tried on 11 public repos (the audio rules, v0.5)
+
+Shallow clones, on 2026-11-15, of 11 public repos that have an open issue about the TTS or whisper-1 shutdown or
+that call those endpoints (voice assistants, Telegram transcription bots, a Home Assistant TTS integration, meeting
+recorders). I read every audio call-site finding in its source. The first pass had 5 false positives: the endpoint
+path inside `endswith()`, a slice and a settings `.get(KEY, "https://.../audio/speech")` fallback. Raw calls now
+need an HTTP callee with the URL as a positional argument. It also missed the most common real shape, a `FormData`
+(JS) or `data` dict (Python) filled in before the request, which is now read back to the form's last assignment.
+Final run: 11 call-site findings (5 `speech-endpoint`, 6 `transcribe-params`), all real calls, in 4 repos. Two
+repos keep the URL in a field or variable and are missed (see above). On the largest repo (hermes-agent) v0.4
+and v0.5 agree on every older finding, and the scan takes the same time (37 s vs 38 s).
 
 ## Tried on 32 public repos (the Perspective rules, v0.4)
 
@@ -224,10 +299,13 @@ across files.
 ```sh
 npm ci
 npm run check   # tsc --noEmit (strict) + vitest
+
+cd kits/speech-over-realtime && npm ci && npm run check          # Node speak(), against the fake server
+cd python && python -m pip install -r requirements.txt pytest && python -m pytest
 ```
 
 `src/source.ts` is a small Python/JS lexer (strings, comments, brackets). `src/openai/` holds the model table and the
-call-site rules. `src/anthropic/` holds the Claude rules, `src/perspective/` the Perspective API rules. Tests live in
+call-site rules. `src/openai/audio.ts` the Speech and transcription call rules. `src/anthropic/` holds the Claude rules, `src/perspective/` the Perspective API rules. Tests live in
 `test/`.
 
 ## Licence

@@ -1,0 +1,27 @@
+{
+  "name": "speech-over-realtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "speak(text) -> WAV bytes over the OpenAI Realtime API, for code that loses /v1/audio/speech on 2027-01-06",
+  "type": "module",
+  "license": "MIT",
+  "author": "Sunnatulla E",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "ws": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/ws": "8.18.2",
+    "openai": "7.57.0",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  }
+}
